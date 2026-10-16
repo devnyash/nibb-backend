@@ -113,7 +113,7 @@ const server = http.createServer(async (req,res) => {
     send(res,200,{ok:true,service:'nibb-backend',upstream:'local',ts:new Date().toISOString()});
     return;
   }
-  if (path === '/') { send(res,200,{ok:true,message:'nibb backend'}); return; }
+  if (path === '/' && !params.has('_rsc')) { send(res,200,{ok:true,message:'nibb backend'}); return; }
 
   // RPC proxy (Solana is external infra, not business data)
   if (path === '/api/rpc') {
@@ -337,7 +337,26 @@ const server = http.createServer(async (req,res) => {
     return;
   }
 
-  // fallback 404
+  // RSC cache (autonomous, no upstream)
+  if (params.has('_rsc') || req.headers.rsc === '1' || req.headers['next-router-prefetch'] !== undefined) {
+    const clean = path.replace(/\/+$/, '');
+    let name = 'index';
+    if (clean && clean !== '' && clean !== '/' && clean !== '/app') {
+      const parts = clean.split('/').filter(Boolean);
+      name = parts[parts.length - 1];
+    }
+    const rscFile = (require('path')).join(__dirname, 'data', 'rsc', name + '.txt');
+    if (fs.existsSync(rscFile)) {
+      const buf = fs.readFileSync(rscFile);
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.setHeader('cache-control', 'private, no-cache, no-store, max-age=0, must-revalidate');
+      res.setHeader('x-nextjs-prerender', '1');
+      res.end(buf);
+      return;
+    }
+  }
+
   send(res,404,{ok:false,error:{code:'NOT_FOUND',message:'No route '+path}});
 });
 
