@@ -5,7 +5,11 @@ const https = require('https');
 const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 8787;
-const UPSTREAM_RPC = 'https://api.mainnet-beta.solana.com';
+const CLUSTER = process.env.SOLANA_CLUSTER || 'mainnet';
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
+const UPSTREAM_RPC = process.env.SOLANA_RPC_URL || (HELIUS_API_KEY
+  ? `https://${CLUSTER}.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
+  : (CLUSTER === 'devnet' ? 'https://api.devnet.solana.com' : 'https://api.mainnet-beta.solana.com'));
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'nibb.sqlite');
 const SEED_FILE = path.join(DATA_DIR, 'seed_upstream.json');
@@ -119,7 +123,8 @@ const server = http.createServer(async (req,res) => {
   if (path === '/api/rpc') {
     const chunks=[]; req.on('data',c=>chunks.push(c)); req.on('end',()=>{
       const body=Buffer.concat(chunks);
-      const r=https.request({hostname:'api.mainnet-beta.solana.com',path:'/',method:'POST',headers:{'content-type':'application/json'}}, (resp)=>{
+      const _rpcUrl=new URL(UPSTREAM_RPC);
+      const r=https.request({hostname:_rpcUrl.hostname,path:_rpcUrl.pathname+_rpcUrl.search,method:'POST',headers:{'content-type':'application/json'}}, (resp)=>{
         res.statusCode=resp.statusCode; resp.pipe(res);
       });
       r.on('error', e=> send(res,502,{ok:false,error:e.message}));
