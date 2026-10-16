@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: nibb-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /status
+    envVars:
+      - key: NIBB_UPSTREAM
+        value: https://app.nibb.work
