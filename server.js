@@ -2,8 +2,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { DatabaseSync } = require('node:sqlite');
-
 const PORT = process.env.PORT || 8787;
 const CLUSTER = process.env.SOLANA_CLUSTER || 'mainnet';
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
@@ -11,24 +9,17 @@ const UPSTREAM_RPC = process.env.SOLANA_RPC_URL || (HELIUS_API_KEY
   ? `https://${CLUSTER}.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
   : (CLUSTER === 'devnet' ? 'https://api.devnet.solana.com' : 'https://api.mainnet-beta.solana.com'));
 const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_DIR, 'nibb.sqlite');
 const SEED_FILE = path.join(DATA_DIR, 'seed_upstream.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
+const TURSO_URL = (process.env.TURSO_DATABASE_URL || '').trim().replace(/^libsql:\/\//, 'https://');
+const TURSO_TOKEN = (process.env.TURSO_AUTH_TOKEN || '').trim();
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 let seed = {};
 try { seed = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8')); } catch {}
 
-const db = new DatabaseSync(DB_FILE);
-db.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
-const getKv = db.prepare('SELECT v FROM kv WHERE k=?');
-const setKv = db.prepare('INSERT OR REPLACE INTO kv(k,v) VALUES(?,?)');
-
-function loadState() {
-  const row = getKv.get('state');
-  if (row) { try { return JSON.parse(row.v); } catch {} }
-  // initial
+function initialState() {
   return {
     config: (seed['config/public'] && seed['config/public'].data) || {},
     catalog: (seed['catalog'] && seed['catalog'].data) || [],
@@ -50,8 +41,64 @@ function loadState() {
     jobsSeed: []
   };
 }
-let state = loadState();
-function persist() { setKv.run('state', JSON.stringify(state)); }
+
+async function tursoFetch(body) {
+  const base = TURSO_URL.endsWith('/') ? TURSO_URL.slice(0,-1) : TURSO_URL;
+  const url = base + '/v2/pipeline';
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + TURSO_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requests: body })
+  });
+  return await resp.json();
+}
+
+async function tursoEnsure() {
+  if (!TURSO_URL || !TURSO_TOKEN) return;
+  await tursoFetch([{ type:'execute', stmt:{ sql:'CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)', args: [] } }]);
+}
+
+function extractTursoValue(json) {
+  for (const r of json.results || []) {
+    const rows = (r.response && r.response.result && r.response.result.rows)
+      || (r.result && r.result.rows)
+      || r.rows;
+    if (rows && rows.length) {
+      const cell = rows[0][0];
+      if (cell && typeof cell.value !== 'undefined') return cell.value;
+      return cell;
+    }
+  }
+  return null;
+}
+
+async function loadStateAsync() {
+  if (TURSO_URL && TURSO_TOKEN) {
+    try {
+      await tursoEnsure();
+      const json = await tursoFetch([{ type:'execute', stmt:{ sql:'SELECT v FROM kv WHERE k=?', args: [{'type':'text','value': 'state' }] } }]);
+      const val = extractTursoValue(json);
+      if (val) { try { return JSON.parse(val); } catch {} }
+    } catch (e) { console.error('turso load failed', e.message); }
+  } else {
+    try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch {}
+  }
+  return initialState();
+}
+
+let state = null;
+let persistMode = (TURSO_URL && TURSO_TOKEN) ? 'turso' : 'file';
+function persist() {
+  if (!state) return;
+  const data = JSON.stringify(state);
+  if (persistMode === 'turso') {
+    tursoFetch([{ type:'execute', stmt:{ sql:'INSERT OR REPLACE INTO kv(k,v) VALUES (?,?)', args: [{'type':'text','value':'state'},{'type':'text','value':data}] } }])
+      .catch(e => console.error('turso persist failed', e.message));
+  } else {
+    try { fs.writeFileSync(STATE_FILE, data); } catch (e) { console.error('file persist failed', e.message); }
+  }
+}
+
 
 // sessions
 function cookie(req, name) {
@@ -365,6 +412,9 @@ const server = http.createServer(async (req,res) => {
   send(res,404,{ok:false,error:{code:'NOT_FOUND',message:'No route '+path}});
 });
 
-server.listen(PORT, () => {
-  console.log('nibb backend (independent) listening on', PORT);
-});
+(async () => {
+  state = await loadStateAsync();
+  server.listen(PORT, () => {
+    console.log('nibb backend (independent) listening on', PORT, 'persist=', persistMode);
+  });
+})();
