@@ -11,6 +11,51 @@ const UPSTREAM_RPC = process.env.SOLANA_RPC_URL || (HELIUS_API_KEY
 const DATA_DIR = path.join(__dirname, 'data');
 const SEED_FILE = path.join(DATA_DIR, 'seed_upstream.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
+
+function base58Decode(str) {
+  const ALPH = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  if (typeof str !== 'string' || !str.length) throw new Error('bad sig');
+  let num = 0n;
+  for (const ch of str) {
+    const idx = ALPH.indexOf(ch);
+    if (idx === -1) throw new Error('bad base58');
+    num = num * 58n + BigInt(idx);
+  }
+  let bytes = [];
+  while (num > 0n) { bytes.unshift(Number(num & 0xffn)); num >>= 8n; }
+  let leading = 0;
+  for (const ch of str) { if (ch === '1') leading++; else break; }
+  while (leading--) bytes.unshift(0);
+  return new Uint8Array(bytes);
+}
+function base64Decode(str) {
+  if (typeof str !== 'string') throw new Error('bad sig');
+  return new Uint8Array(Buffer.from(str, 'base64'));
+}
+function decodeSignature(str) {
+  if (typeof str !== 'string') throw new Error('bad sig');
+  if (str.includes('/') || str.includes('+') || str.includes('=')) return base64Decode(str);
+  return base58Decode(str);
+}
+async function verifyEd25519(wallet, msg, sig) {
+  const ALPH = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  function dec(s){
+    let n = 0n;
+    for (const c of s) { const i = ALPH.indexOf(c); if (i < 0) throw new Error('bad pub'); n = n * 58n + BigInt(i); }
+    let b = [];
+    while (n > 0n) { b.unshift(Number(n & 0xffn)); n >>= 8n; }
+    let ld = 0;
+    for (const c of s) { if (c === '1') ld++; else break; }
+    while (ld--) b.unshift(0);
+    return new Uint8Array(b);
+  }
+  const pub = dec(wallet);
+  if (pub.length !== 32) throw new Error('bad publen');
+  const subtle = (globalThis.crypto && globalThis.crypto.subtle) || (globalThis.crypto && globalThis.crypto.webcrypto && globalThis.crypto.webcrypto.subtle);
+  if (!subtle) throw new Error('no subtle');
+  const key = await subtle.importKey('raw', pub, 'Ed25519', false, ['verify']);
+  return subtle.verify('Ed25519', key, new Uint8Array(sig), new Uint8Array(msg));
+}
 const TURSO_URL = (process.env.TURSO_DATABASE_URL || '').trim().replace(/^libsql:\/\//, 'https://');
 const TURSO_TOKEN = (process.env.TURSO_AUTH_TOKEN || '').trim();
 
@@ -187,22 +232,38 @@ const server = http.createServer(async (req,res) => {
     send(res,200,{ok:true,data:{user:u}});
     return;
   }
-  if (path === '/api/auth/nonce' && req.method === 'POST') {
+  if (path === "/api/auth/nonce" && req.method === "POST") {
     const b = await readBody(req);
-    const wallet = b.wallet || params.get('wallet');
+    const wallet = b.wallet || params.get("wallet");
     const nonce = Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
-    state.nonces[wallet] = nonce;
-    const message = `nibb.work wants you to sign in with your Solana account:\n${wallet}\n\nNonce: ${nonce}`;
+    const domain = (function(){ try { if (req.headers.origin) return new URL(req.headers.origin).host; } catch (e) {} return req.headers.host || "localhost"; })();
+    const issuedAt = new Date().toISOString();
+    const message = `${domain} wants you to sign in with your Solana account:\n${wallet}\n\nNonce: ${nonce}\nIssued At: ${issuedAt}`;
+    state.nonces[nonce] = { wallet, message, createdAt: issuedAt };
     persist();
-    send(res,200,{ok:true,data:{nonce,message,wallet}});
+    send(res,200,{ok:true,data:{nonce,message}});
     return;
   }
   if (path === '/api/auth/verify' && req.method === 'POST') {
     const b = await readBody(req);
     const wallet = b.wallet;
-    state.nonces[wallet] = null;
+    const rec = state.nonces[b.nonce];
+    if (!rec || rec.wallet !== wallet) {
+      send(res,401,{ok:false,error:{code:'UNAUTHENTICATED',message:'Unverified'}}); return;
+    }
+    let ok = true;
+    try {
+      const msg = new TextEncoder().encode(rec.message);
+      const sig = decodeSignature(b.signature);
+      ok = await verifyEd25519(wallet, msg, sig);
+    } catch (e) { ok = false; }
+    if (!ok) {
+      send(res,401,{ok:false,error:{code:'UNAUTHENTICATED',message:'Bad signature'}}); return;
+    }
+    delete state.nonces[b.nonce];
     const sid = newSession(wallet);
     res.setHeader('set-cookie', `nbx_session=${encodeURIComponent(sid)}; Path=/; HttpOnly; SameSite=Lax`);
+    persist();
     send(res,200,{ok:true,data:{user:{wallet}}});
     return;
   }
