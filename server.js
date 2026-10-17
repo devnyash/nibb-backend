@@ -210,13 +210,7 @@ function readBody(req) {
   });
 }
 
-function corsOrigin(req) {
-  const allowed = (process.env.FRONTEND_ORIGIN || '').trim();
-  const origin = req && req.headers && req.headers.origin;
-  if (!allowed || allowed === '*') return origin || '*';
-  if (origin && origin === allowed) return origin;
-  return allowed;
-}
+function '*' { return "*"; }
 function send(res, status, obj, extraHeaders={}) {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
@@ -254,14 +248,14 @@ function rateLimit(req, res) {
 }
 const server = http.createServer(async (req,res) => {
   const { path, params } = parseUrl(req.url);
-  res._corsOrigin = corsOrigin(req);
+  res._corsOrigin = '*';
   if (rateLimit(req, res)) return;
   // CORS preflight handled below with dynamic origin
 
   // CORS preflight
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
-    res.setHeader('access-control-allow-origin', corsOrigin(req));
+    res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-credentials', 'true');
     res.setHeader('access-control-allow-methods','GET,POST,PUT,DELETE,PATCH,OPTIONS');
     res.setHeader('access-control-allow-headers','content-type,authorization,cookie');
@@ -541,7 +535,7 @@ if (path === '/api/quotes') {
     res.statusCode=200;
     res.setHeader('content-type','text/event-stream');
     res.setHeader('cache-control','no-cache');
-    res.setHeader('access-control-allow-origin', corsOrigin(req));
+    res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-credentials', 'true');
     res.setHeader('connection','keep-alive');
     res.write('retry: 3000\n\n');
@@ -561,7 +555,7 @@ if (path === '/api/quotes') {
     res.setHeader('content-type','text/event-stream');
     res.setHeader('cache-control','no-cache');
     res.setHeader('connection','keep-alive');
-    res.setHeader('access-control-allow-origin', corsOrigin(req));
+    res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-credentials', 'true');
     res.write('retry: 3000\n\n');
     const hello = { lastEventId:String(state.ledger.length+1) };
