@@ -179,7 +179,6 @@ function persist() {
   }
 }
 
-
 // sessions
 function cookie(req, name) {
   const c = req.headers.cookie || '';
@@ -210,7 +209,6 @@ function readBody(req) {
   });
 }
 
-function '*' { return "*"; }
 function send(res, status, obj, extraHeaders={}) {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
