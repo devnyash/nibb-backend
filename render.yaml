@@ -8,8 +8,8 @@ services:
     healthCheckPath: /status
     envVars:
       - key: OCLO_UPSTREAM
-        value: https://app.oclo.work
+        value: https://self-6734124649-1792155700.vercel.app
       - key: SOLANA_CLUSTER
         value: mainnet
       - key: FRONTEND_ORIGIN
-        value: https://app.oclo.work
+        value: https://self-6734124649-1792155700.vercel.app
