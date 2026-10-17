@@ -133,6 +133,40 @@ async function loadStateAsync() {
 
 let state = null;
 let persistMode = (TURSO_URL && TURSO_TOKEN) ? 'turso' : 'file';
+
+// SSE event bus
+const sseRunsClients = new Map(); // batchId -> Set(res)
+const sseLedgerClients = new Set();
+function sseAddRuns(res, batchId) {
+  const key = batchId || '*';
+  if (!sseRunsClients.has(key)) sseRunsClients.set(key, new Set());
+  sseRunsClients.get(key).add(res);
+}
+function sseRemoveRuns(res, batchId) {
+  const key = batchId || '*';
+  const set = sseRunsClients.get(key);
+  if (set) { set.delete(res); if (!set.size) sseRunsClients.delete(key); }
+}
+function sseBroadcastRuns(batchId, event, data) {
+  const payload = `event: ${event}\\ndata: ${JSON.stringify(data)}\\n\\n`;
+  const keys = [batchId, '*'];
+  const sent = new Set();
+  for (const k of keys) {
+    const set = sseRunsClients.get(k);
+    if (!set) continue;
+    for (const r of set) {
+      if (sent.has(r)) continue;
+      sent.add(r);
+      try { if (!r.writableEnded) r.write(payload); } catch {}
+    }
+  }
+}
+function sseBroadcastLedger(event, data) {
+  const payload = `event: ${event}\\ndata: ${JSON.stringify(data)}\\n\\n`;
+  for (const r of sseLedgerClients) {
+    try { if (!r.writableEnded) r.write(payload); } catch {}
+  }
+}
 function persist() {
   if (!state) return;
   const data = JSON.stringify(state);
@@ -175,10 +209,18 @@ function readBody(req) {
   });
 }
 
+function corsOrigin(req) {
+  const allowed = (process.env.FRONTEND_ORIGIN || '').trim();
+  const origin = req && req.headers && req.headers.origin;
+  if (!allowed || allowed === '*') return origin || '*';
+  if (origin && origin === allowed) return origin;
+  return allowed;
+}
 function send(res, status, obj, extraHeaders={}) {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
-  res.setHeader('access-control-allow-origin', '*');
+  res.setHeader('access-control-allow-origin', (res && res._corsOrigin) || '*');
+  res.setHeader('access-control-allow-credentials', 'true');
   Object.entries(extraHeaders).forEach(([k,v])=>res.setHeader(k,v));
   res.end(JSON.stringify(obj));
 }
@@ -191,13 +233,35 @@ function parseUrl(url) {
   return { path, params };
 }
 
+const _rateBuckets = new Map();
+function rateLimit(req, res) {
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').toString().split(',')[0].trim();
+  const now = Date.now();
+  const windowMs = 60000;
+  const max = 300;
+  let b = _rateBuckets.get(ip);
+  if (!b || now - b.start > windowMs) { b = { start: now, count: 0 }; _rateBuckets.set(ip, b); }
+  b.count++;
+  if (b.count > max) {
+    res.statusCode = 429;
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('retry-after', '60');
+    res.end(JSON.stringify({ ok:false, error:{ code:'RATE_LIMITED', message:'Too many requests' } }));
+    return true;
+  }
+  return false;
+}
 const server = http.createServer(async (req,res) => {
   const { path, params } = parseUrl(req.url);
+  res._corsOrigin = corsOrigin(req);
+  if (rateLimit(req, res)) return;
+  // CORS preflight handled below with dynamic origin
 
   // CORS preflight
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
-    res.setHeader('access-control-allow-origin','*');
+    res.setHeader('access-control-allow-origin', corsOrigin(req));
+    res.setHeader('access-control-allow-credentials', 'true');
     res.setHeader('access-control-allow-methods','GET,POST,PUT,DELETE,PATCH,OPTIONS');
     res.setHeader('access-control-allow-headers','content-type,authorization,cookie');
     res.end();
@@ -206,10 +270,10 @@ const server = http.createServer(async (req,res) => {
 
   // health
   if (path === '/status' || path === '/health') {
-    send(res,200,{ok:true,service:'nibb-backend',upstream:'local',ts:new Date().toISOString()});
+    send(res,200,{ok:true,service:'oclo-backend',upstream:'local',ts:new Date().toISOString()});
     return;
   }
-  if (path === '/' && !params.has('_rsc')) { send(res,200,{ok:true,message:'nibb backend'}); return; }
+  if (path === '/' && !params.has('_rsc')) { send(res,200,{ok:true,message:'oclo backend'}); return; }
 
   // RPC proxy (Solana is external infra, not business data)
   if (path === '/api/rpc') {
@@ -235,6 +299,7 @@ const server = http.createServer(async (req,res) => {
   if (path === "/api/auth/nonce" && req.method === "POST") {
     const b = await readBody(req);
     const wallet = b.wallet || params.get("wallet");
+    if (!wallet) { send(res,400,{ok:false,error:{code:'BAD_REQUEST',message:'wallet required'}}); return; }
     const nonce = Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
     const domain = (function(){ try { if (req.headers.origin) return new URL(req.headers.origin).host; } catch (e) {} return req.headers.host || "localhost"; })();
     const issuedAt = new Date().toISOString();
@@ -347,6 +412,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET') { send(res,200,{ok:true,data:state.quotes}); return; }
     if (req.method === 'POST') {
       const b = await readBody(req);
+      if (!Array.isArray(b.items)) { send(res,400,{ok:false,error:{code:'BAD_REQUEST',message:'items array required'}}); return; }
       const items = (b.items||[]).map(it => {
         const jt = state.catalog.find(c=>c.id===it.jobTypeId);
         const price = jt ? (jt.pricePerJobUsd||0)*(it.quantity||0) : 0;
@@ -366,6 +432,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET') { send(res,200,{ok:true,data:state.inputs}); return; }
     if (req.method === 'POST') {
       const b = await readBody(req);
+      if (!b || typeof b !== 'object') { send(res,400,{ok:false,error:{code:'BAD_REQUEST',message:'body required'}}); return; }
       const input = { id:'IN-'+Date.now(), createdAt:new Date().toISOString(), ...b };
       state.inputs.push(input);
       persist();
@@ -377,7 +444,8 @@ const server = http.createServer(async (req,res) => {
   // provide
   if (path === '/api/provide/register' && req.method === 'POST') {
     const b = await readBody(req);
-    const device = { wallet:b.wallet||null, caps:b.caps||{}, registeredAt:new Date().toISOString(), status:'online' };
+    if (!b.wallet) { send(res,400,{ok:false,error:{code:'BAD_REQUEST',message:'wallet required'}}); return; }
+    const device = { wallet:b.wallet, caps:b.caps||{}, registeredAt:new Date().toISOString(), status:'online' };
     const id = 'dev-'+Date.now();
     state.devices[id] = device;
     persist();
@@ -388,7 +456,9 @@ const server = http.createServer(async (req,res) => {
     const b = await readBody(req);
     // find an unclaimed job from batches/results? return a sample job
     const batch = state.batches[0];
-    const job = { jobId: (batch?batch.id:'B0000') + '-' + (Math.floor(Math.random()*900)+100), batchId: batch?batch.id:null, imageId:'bird-02', claimedAt:new Date().toISOString(), device:b.deviceId||null };
+    const sampleImages = ['bird-02','bottle-02','bread-03','bridge-04','cat-01'];
+    const imageId = sampleImages[Math.floor(Math.random()*sampleImages.length)];
+    const job = { jobId: (batch?batch.id:'B0000') + '-' + (Math.floor(Math.random()*900)+100), batchId: batch?batch.id:null, imageId, claimedAt:new Date().toISOString(), device:b.deviceId||null };
     send(res,200,{ok:true,data:job});
     return;
   }
@@ -413,6 +483,8 @@ const server = http.createServer(async (req,res) => {
     const ledgerRow = { id:'L-'+Date.now(), kind:'payout', jobId:resRow.jobId, batchId:resRow.batchId, device:resRow.device, check:'verified', amountUsd:b.amountUsd||0.044, status:'settled', tx:null, at:new Date().toISOString() };
     state.ledger.unshift(ledgerRow);
     persist();
+    sseBroadcastRuns(resRow.batchId, 'result', resRow);
+    sseBroadcastLedger('ledger', ledgerRow);
     send(res,200,{ok:true,data:{job:resRow,ledger:ledgerRow}});
     return;
   }
@@ -422,16 +494,19 @@ const server = http.createServer(async (req,res) => {
     res.statusCode=200;
     res.setHeader('content-type','text/event-stream');
     res.setHeader('cache-control','no-cache');
+    res.setHeader('access-control-allow-origin', corsOrigin(req));
+    res.setHeader('access-control-allow-credentials', 'true');
     res.setHeader('connection','keep-alive');
     res.write('retry: 3000\n\n');
     const bid = params.get('batchId');
     const hello = { batchId:bid, lastEventId:String(state.ledger.length+1) };
     res.write('event: hello\ndata: '+JSON.stringify(hello)+'\n\n');
+    sseAddRuns(res, bid);
     const interval = setInterval(()=> {
       if (res.writableEnded) { clearInterval(interval); return; }
       res.write('event: ping\ndata: '+JSON.stringify({ts:new Date().toISOString()})+'\n\n');
     }, 15000);
-    req.on('close', ()=>clearInterval(interval));
+    req.on('close', ()=>{ clearInterval(interval); sseRemoveRuns(res, bid); });
     return;
   }
   if (path === '/api/stream/ledger') {
@@ -439,14 +514,17 @@ const server = http.createServer(async (req,res) => {
     res.setHeader('content-type','text/event-stream');
     res.setHeader('cache-control','no-cache');
     res.setHeader('connection','keep-alive');
+    res.setHeader('access-control-allow-origin', corsOrigin(req));
+    res.setHeader('access-control-allow-credentials', 'true');
     res.write('retry: 3000\n\n');
     const hello = { lastEventId:String(state.ledger.length+1) };
     res.write('event: hello\ndata: '+JSON.stringify(hello)+'\n\n');
+    sseLedgerClients.add(res);
     const interval = setInterval(()=> {
       if (res.writableEnded) { clearInterval(interval); return; }
       res.write('event: ping\ndata: '+JSON.stringify({ts:new Date().toISOString()})+'\n\n');
     }, 15000);
-    req.on('close', ()=>clearInterval(interval));
+    req.on('close', ()=>{ clearInterval(interval); sseLedgerClients.delete(res); });
     return;
   }
 
@@ -474,8 +552,14 @@ const server = http.createServer(async (req,res) => {
 });
 
 (async () => {
+  if (TURSO_URL && TURSO_URL.includes('agentry')) {
+    console.warn('WARNING: TURSO_DATABASE_URL points at an agentry database. Use a dedicated oclo database or unset TURSO_* for local file persistence.');
+  }
+  if ((process.env.SOLANA_CLUSTER || '') === 'devnet') {
+    console.warn('WARNING: SOLANA_CLUSTER=devnet, but oclo.work runs on mainnet. Set SOLANA_CLUSTER=mainnet for production.');
+  }
   state = await loadStateAsync();
   server.listen(PORT, () => {
-    console.log('nibb backend (independent) listening on', PORT, 'persist=', persistMode);
+    console.log('oclo backend (independent) listening on', PORT, 'persist=', persistMode, 'cluster=', CLUSTER);
   });
 })();

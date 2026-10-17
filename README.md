@@ -1,22 +1,21 @@
-# NIBB backend (transparent 1:1 API proxy)
+# oclo-backend
 
-This service exposes the same API surface as `app.nibb.work/api` by proxying
-requests to the upstream while stripping browser `Origin` (otherwise the
-upstream RPC rejects the call with 403).
+Independent backend for oclo.work / app.oclo.work.
 
-## Run locally
+## Run
+```bash
+cp .env.example .env   # fill values
 npm install
-cp .env.example .env
 npm start
-# health: http://localhost:8787/status
+```
 
-## Deploy to Render
-- New → Web Service → connect `devnyash/nibb-backend`
-- Runtime: Node (or Docker). Free plan ok.
-- Set `NIBB_UPSTREAM=https://app.nibb.work`.
-- Health check path: `/status`.
+## Env
+See `.env.example`. Use a dedicated Turso database (not agentry). `SOLANA_CLUSTER=mainnet` for production.
 
-## Notes
-Current implementation is a faithful API pass-through (it copies status code,
-headers and body byte-for-byte). Stateful mutation endpoints continue to hit
-the upstream service, so behavior matches the source 1:1.
+## Smoke
+```bash
+npm run smoke
+```
+
+## Health
+`GET /status` returns service health.

@@ -1,11 +1,15 @@
 services:
   - type: web
-    name: nibb-backend
+    name: oclo-backend
     runtime: node
     plan: free
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /status
     envVars:
-      - key: NIBB_UPSTREAM
-        value: https://app.nibb.work
+      - key: OCLO_UPSTREAM
+        value: https://app.oclo.work
+      - key: SOLANA_CLUSTER
+        value: mainnet
+      - key: FRONTEND_ORIGIN
+        value: https://app.oclo.work

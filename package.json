@@ -1,11 +1,12 @@
 {
-  "name": "nibb-backend",
+  "name": "oclo-backend",
   "version": "1.0.0",
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env server.js",
+    "smoke": "node scripts/smoke.mjs"
   },
   "engines": {
     "node": ">=20"
