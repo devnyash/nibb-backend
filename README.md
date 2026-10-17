@@ -1,72 +1,47 @@
-# Oclo Backend
+# Oclo Backend 🚀
 
-High-performance Solana-integrated backend for the Oclo platform. Handles user authentication via SIWS (Sign-In With Solana), quote calculations, catalog management, and on-chain financial settlements.
+Это серверная часть (бэкенд) платформы Oclo. Она отвечает за авторизацию пользователей через криптокошельки, расчет стоимости услуг и управление финансовыми операциями в сети Solana.
 
-## 🚀 Tech Stack
-- **Runtime**: Node.js (v20+)
-- **Database**: [Turso](https://turso.tech/) (libsql) — globally distributed edge database.
-- **Solana Integration**: `@solana/web3.js` & `@coral-xyz/anchor`.
-- **RPC Provider**: Helius.
-- **Deployment**: Render.
+---
 
-## ✨ Key Features
-- **SIWS Authentication**: Secure, passwordless login using Solana wallet signatures (nonce-based verification).
-- **Dynamic Catalog**: API for managing and retrieving available job types and pricing.
-- **Quote Engine**: Real-time USD calculations for job batches.
-- **On-Chain Settlement (Phase 3)**: 
-  - `reserve`: Locking funds on-chain.
-  - `payout`: Executing payments to users.
-  - `buyback`: Processing token buybacks.
-  - `deposit`: Handling fund deposits.
-- **Simulation Mode**: Built-in fail-safe that allows the API to function with mock transactions if Solana configuration is missing.
+## 🛠 Как запустить (Инструкция для владельца)
 
-## ⚙️ Configuration
+Чтобы сервер работал полноценно, нужно настроить файл `.env` (переменные окружения). Если вы используете **Render**, эти значения вносятся в разделе **Environment Variables**.
 
-Create a `.env` file in the root directory based on `.env.example`:
+### 1. Что нужно ввести в `.env`
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `PORT` | Server port (default: 8787) | No |
-| `SOLANA_CLUSTER` | `mainnet` or `devnet` | Yes |
-| `SOLANA_RPC_URL` | Your Helius or Solana RPC URL | Yes |
-| `HELIUS_API_KEY` | API key for Helius RPC | Yes |
-| `TURSO_DATABASE_URL`| Turso DB connection string | Yes |
-| `TURSO_AUTH_TOKEN` | Turso authentication token | Yes |
-| `FRONTEND_ORIGIN` | CORS origin for the frontend | Yes |
-| `PROGRAM_ID` | Public key of the Solana smart contract | Yes (for Real Mode) |
-| `IDL_PATH` | Path to the `idl.json` file | Yes (for Real Mode) |
-| `AUTHORITY_KEYPAIR` | JSON array of the admin private key | Yes (for Real Mode) |
+| Переменная | Что это и где взять | Важность |
+| :--- | :--- | :--- |
+| `SOLANA_RPC_URL` | URL вашего RPC-узла (нап��имер, от **Helius**). | 🔴 Критично |
+| `HELIUS_API_KEY` | Ваш API ключ от Helius. | 🔴 Критично |
+| `TURSO_DATABASE_URL`| Строка подключения к базе данных **Turso** (начинается с `libsql://`). | 🔴 Критично |
+| `TURSO_AUTH_TOKEN` | Токен авторизации для доступа к базе Turso. | 🔴 Критильно |
+| `FRONTEND_ORIGIN` | Ссылка на ваш фронтенд (например, `https://app.oclo.work`). | 🔴 Критично |
+| `PROGRAM_ID` | Публичный адрес вашего смарт-контракта в Solana. | 🟡 Для выплат |
+| `IDL_PATH` | Путь к файлу описания контракта (по умолчанию `./idl.json`). | 🟡 Для выплат |
+| `AUTHORITY_KEYPAIR` | Приватный ключ кошелька-админа (массив чисел из `id.json`). | 🟡 Для выплат |
 
-## 🛠 Installation & Running
+> **Важно:** Если данные для `PROGRAM_ID` и `AUTHORITY_KEYPAIR` не введены, сервер переходит в **режим симуляции**. Все API будут работать, но реальные транзакции в сеть Solana отправляться не будут (будут возвращаться тестовые ID).
 
-```bash
-# Install dependencies
-npm install
+---
 
-# Run in development mode
-npm run dev
+## ✅ Что уже готово и работает
+- **Вход через кошелек (SIWS)**: Пользователь подписывает сообщение $\rightarrow$ сервер проверяет подпись $\rightarrow$ создается сессия.
+- **Каталог услуг**: API выдает актуальный список услуг и их стоимость.
+- **Расчет стоимости (Quotes)**: Система мгновенно считает общую сумму заказа в USD.
+- **База данных**: Все данные о сессиях и заказах хранятся в облачной базе Turso.
+- **Деплой**: Сервер настроен на автоматический запуск через Render.
 
-# Run smoke tests
-npm run smoke
-```
+## ⚠️ Что осталось доделать (Phase 3)
+Техническая база для выплат готова, но для финального запуска нужны данные от смарт-контракта:
+1. **Связь с контрактом**: Нужно загрузить файл `idl.json` в корень сервера.
+2. **Настройка выплат**: Ввести `PROGRAM_ID` и `AUTHORITY_KEYPAIR`.
+3. **Тестирование ончейн**: После ввода ключей нужно провести тестовую транзакцию `reserve` $\rightarrow$ `payout` в сети Solana.
 
-## 📡 API Endpoints
+---
 
-### Auth
-- `POST /api/auth/nonce` $\rightarrow$ Get a unique message to sign.
-- `POST /api/auth/verify` $\rightarrow$ Verify signature and start session.
+## 🔍 Как проверить работу
+После запуска сервера можно проверить его статус по ссылке:
+`https://nibb-backend-independent.onrender.com/status`
 
-### Core
-- `GET /status` $\rightarrow$ Service health check.
-- `GET /api/catalog` $\rightarrow$ List available services.
-- `POST /api/quotes` $\rightarrow$ Calculate cost for a batch of jobs.
-- `GET /api/credits` $\rightarrow$ Check user balance.
-
-### Settlement (Phase 3)
-- `POST /api/reserve` $\rightarrow$ Reserve funds.
-- `POST /api/payout` $\rightarrow$ Payout funds.
-- `POST /api/buyback` $\rightarrow$ Execute buyback.
-- `POST /api/deposit` $\rightarrow$ Deposit funds.
-
-## 🧪 Testing
-The project includes a comprehensive smoke test suite in `scripts/smoke.mjs` that verifies the server lifecycle, API availability, and SIWS flow.
+Если вы видите `{"ok":true, ...}`, значит сервер работает исправно.
