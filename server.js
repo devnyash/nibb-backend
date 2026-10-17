@@ -1,3 +1,4 @@
+const solana = require("./solana");
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -408,7 +409,53 @@ const server = http.createServer(async (req,res) => {
   }
 
   // quotes
-  if (path === '/api/quotes') {
+  
+  // on-chain settlement
+  if (path === '/api/reserve') {
+    if (req.method !== 'POST') { send(res,405); return; }
+    const b = await readBody(req);
+    const sid = cookie(req, 'nbx_session');
+    if (!sid) { send(res,401,{ok:false,error:'No session'}); return; }
+    try {
+      const res_tx = await solana.reserve(b.wallet, b.amount);
+      send(res,200,{ok:true,data:res_tx});
+    } catch (e) { send(res,500,{ok:false,error:e.message}); }
+    return;
+  }
+  if (path === '/api/payout') {
+    if (req.method !== 'POST') { send(res,405); return; }
+    const b = await readBody(req);
+    const sid = cookie(req, 'nbx_session');
+    if (!sid) { send(res,401,{ok:false,error:'No session'}); return; }
+    try {
+      const res_tx = await solana.payout(b.wallet, b.amount);
+      send(res,200,{ok:true,data:res_tx});
+    } catch (e) { send(res,500,{ok:false,error:e.message}); }
+    return;
+  }
+  if (path === '/api/buyback') {
+    if (req.method !== 'POST') { send(res,405); return; }
+    const b = await readBody(req);
+    const sid = cookie(req, 'nbx_session');
+    if (!sid) { send(res,401,{ok:false,error:'No session'}); return; }
+    try {
+      const res_tx = await solana.buyback(b.wallet, b.amount);
+      send(res,200,{ok:true,data:res_tx});
+    } catch (e) { send(res,500,{ok:false,error:e.message}); }
+    return;
+  }
+  if (path === '/api/deposit') {
+    if (req.method !== 'POST') { send(res,405); return; }
+    const b = await readBody(req);
+    const sid = cookie(req, 'nbx_session');
+    if (!sid) { send(res,401,{ok:false,error:'No session'}); return; }
+    try {
+      const res_tx = await solana.deposit(b.wallet, b.amount);
+      send(res,200,{ok:true,data:res_tx});
+    } catch (e) { send(res,500,{ok:false,error:e.message}); }
+    return;
+  }
+if (path === '/api/quotes') {
     if (req.method === 'GET') { send(res,200,{ok:true,data:state.quotes}); return; }
     if (req.method === 'POST') {
       const b = await readBody(req);
