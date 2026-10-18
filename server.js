@@ -13,6 +13,17 @@ const DATA_DIR = path.join(__dirname, 'data');
 const SEED_FILE = path.join(DATA_DIR, 'seed_upstream.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 
+// Public image batch served to the frontend (matches the /batch/*.webp assets shipped with the app).
+const PUBLIC_BATCH = [
+  'bird-01','bird-02','bird-03','bird-04',
+  'boat-01','boat-02','boat-03','boat-04',
+  'bridge-01','bridge-02','bridge-03','bridge-04',
+  'bicycle-01','bicycle-02','bicycle-03','bicycle-04',
+  'bread-01','bread-02','bread-03','bread-04',
+  'bottle-01','bottle-02','bottle-03','bottle-04',
+];
+const PUBLIC_HOSTS = ['upload.wikimedia.org'];
+
 function base58Decode(str) {
   const ALPH = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   if (typeof str !== 'string' || !str.length) throw new Error('bad sig');
@@ -468,7 +479,7 @@ if (path === '/api/quotes') {
 
   // inputs
   if (path === '/api/inputs') {
-    if (req.method === 'GET') { send(res,200,{ok:true,data:state.inputs}); return; }
+    if (req.method === 'GET') { send(res,200,{ok:true,data:{ publicBatch: PUBLIC_BATCH, hosts: PUBLIC_HOSTS }}); return; }
     if (req.method === 'POST') {
       const b = await readBody(req);
       if (!b || typeof b !== 'object') { send(res,400,{ok:false,error:{code:'BAD_REQUEST',message:'body required'}}); return; }
